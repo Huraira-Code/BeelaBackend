@@ -55,7 +55,7 @@ exports.auth = async (req, res, next) => {
     // 6. Grant access to protected route
     req.user = currentUser;
     res.locals.user = currentUser;
-    console.log('User authenticated:', {
+    console.log('User authenticated 2:', {
       id: currentUser._id,
       email: currentUser.email
     });

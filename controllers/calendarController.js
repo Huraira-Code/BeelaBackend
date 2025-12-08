@@ -16,6 +16,7 @@ const oauth2Client = new OAuth2(
 
 // ✅ Generate Google OAuth URL
 const getAuthUrl = catchAsync(async (req, res) => {
+  console.log("abc")
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     throw new AppError('Please provide a valid token', 401);
@@ -33,6 +34,8 @@ const getAuthUrl = catchAsync(async (req, res) => {
     prompt: 'consent',
     state: token
   });
+
+  console.log(url)
 
   res.status(200).json({ status: 'success', data: { url } });
 });

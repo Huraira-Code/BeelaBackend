@@ -114,7 +114,7 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid email or password' });
     }
 
-    // 2. Check if password is correct
+    // 2. Check if passwis correct
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid email or password' });
