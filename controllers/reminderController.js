@@ -1,32 +1,34 @@
-const Reminder = require('../models/reminderModel');
-const { ensureReminderTTS } = require('../utils/ttsService');
+const Reminder = require("../models/reminderModel");
+const { ensureReminderTTS } = require("../utils/ttsService");
 
 // Lazily require to avoid circular dependencies on startup
 let ai;
-try { ai = require('../services/aiScheduler'); } catch {}
+try {
+  ai = require("../services/aiScheduler");
+} catch {}
 
 // Helper: sanitize update payload to only allow known fields
 function pickReminderFields(src = {}) {
   const out = {};
   const allowed = [
-    'type',
-    'title',
-    'description',
-    'icon',
-    'startDate',
-    'location',
+    "type",
+    "title",
+    "description",
+    "icon",
+    "startDate",
+    "location",
     // Location-based fields
-    'day',
-    'status',
-    'lastTriggeredAt',
-    'triggeredLocation',
-    'isCompleted',
+    "day",
+    "status",
+    "lastTriggeredAt",
+    "triggeredLocation",
+    "isCompleted",
     // New scheduling fields
-    'isManualSchedule',
-    'scheduleType',
-    'scheduleTime',
-    'scheduleDays',
-    'notificationPreferenceMinutes',
+    "isManualSchedule",
+    "scheduleType",
+    "scheduleTime",
+    "scheduleDays",
+    "notificationPreferenceMinutes",
   ];
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = src[k];
@@ -68,18 +70,26 @@ exports.createReminder = async (req, res) => {
       scheduleType,
       scheduleTime,
       scheduleDays,
-      notificationPreferenceMinutes: typeof notificationPreferenceMinutes === 'number' ? notificationPreferenceMinutes : 10,
+      notificationPreferenceMinutes:
+        typeof notificationPreferenceMinutes === "number"
+          ? notificationPreferenceMinutes
+          : 10,
     };
 
-
     // Enforce Meeting flow: manual-only with required startDate and per-item minutes
-    if (payload.type === 'Meeting') {
+    if (payload.type === "Meeting") {
       if (!payload.startDate) {
-        return res.status(400).json({ success: false, message: 'Start date is required for meetings' });
+        return res.status(400).json({
+          success: false,
+          message: "Start date is required for meetings",
+        });
       }
       payload.isManualSchedule = true;
-      payload.scheduleType = 'one-day';
-      const pref = typeof notificationPreferenceMinutes === 'number' ? notificationPreferenceMinutes : (scheduleTime?.minutesBeforeStart ?? 10);
+      payload.scheduleType = "one-day";
+      const pref =
+        typeof notificationPreferenceMinutes === "number"
+          ? notificationPreferenceMinutes
+          : scheduleTime?.minutesBeforeStart ?? 10;
       payload.scheduleTime = { minutesBeforeStart: pref };
       payload.scheduleDays = [];
       payload.notificationPreferenceMinutes = pref;
@@ -87,13 +97,24 @@ exports.createReminder = async (req, res) => {
 
     // Persist
     const created = await Reminder.create(payload);
-    const populatedReminder = await Reminder.findById(created._id).populate('user', 'fullname email');
+    const populatedReminder = await Reminder.findById(created._id).populate(
+      "user",
+      "fullname email"
+    );
 
     // If Meeting or manual one-day Task, synchronously generate aiNotificationLine so clients can use it immediately
     try {
-      if (populatedReminder.type === 'Meeting' || (populatedReminder.type === 'Task' && populatedReminder.isManualSchedule && populatedReminder.scheduleType === 'one-day')) {
+      if (
+        populatedReminder.type === "Meeting" ||
+        (populatedReminder.type === "Task" &&
+          populatedReminder.isManualSchedule &&
+          populatedReminder.scheduleType === "one-day")
+      ) {
         if (ai?.generateNotificationLineWithGemini) {
-          const line = await ai.generateNotificationLineWithGemini({ reminder: populatedReminder, user });
+          const line = await ai.generateNotificationLineWithGemini({
+            reminder: populatedReminder,
+            user,
+          });
           if (line) {
             populatedReminder.aiNotificationLine = line;
             await populatedReminder.save();
@@ -101,7 +122,7 @@ exports.createReminder = async (req, res) => {
         }
       }
     } catch (e) {
-      console.warn('[ai] meeting line generation failed', e?.message);
+      console.warn("[ai] meeting line generation failed", e?.message);
     }
 
     // Fire-and-forget TTS generation only when we already have a startDate
@@ -110,18 +131,34 @@ exports.createReminder = async (req, res) => {
         await ensureReminderTTS(populatedReminder._id, { user });
       }
     } catch (e) {
-      console.warn('[tts] generation failed on create', e?.message);
+      console.warn("[tts] generation failed on create", e?.message);
     }
 
-    const useSync = process.env.USE_SYNC_AI === '1';
+    const useSync = process.env.USE_SYNC_AI === "1";
     if (useSync && ai?.processBackgroundAI) {
-      console.log('[ai] USE_SYNC_AI enabled: processing AI synchronously on create');
+      console.log(
+        "[ai] USE_SYNC_AI enabled: processing AI synchronously on create"
+      );
       try {
-        const { reminder: afterAI, meta } = await ai.processBackgroundAI(populatedReminder._id, { user });
-        return res.status(201).json({ success: true, data: afterAI || populatedReminder, aiMeta: meta || null });
+        const { reminder: afterAI, meta } = await ai.processBackgroundAI(
+          populatedReminder._id,
+          { user }
+        );
+        return res.status(201).json({
+          success: true,
+          data: afterAI || populatedReminder,
+          aiMeta: meta || null,
+        });
       } catch (e) {
-        console.warn('[ai] sync AI failed on create; returning base reminder', e?.message);
-        return res.status(201).json({ success: true, data: populatedReminder, aiMeta: { error: e?.message } });
+        console.warn(
+          "[ai] sync AI failed on create; returning base reminder",
+          e?.message
+        );
+        return res.status(201).json({
+          success: true,
+          data: populatedReminder,
+          aiMeta: { error: e?.message },
+        });
       }
     } else {
       res.status(201).json({ success: true, data: populatedReminder });
@@ -129,16 +166,21 @@ exports.createReminder = async (req, res) => {
       setImmediate(() => {
         try {
           if (ai?.processBackgroundAI) {
-            ai.processBackgroundAI(populatedReminder._id, { user }).catch(err => console.warn('[ai] background failed', err?.message));
+            ai.processBackgroundAI(populatedReminder._id, { user }).catch(
+              (err) => console.warn("[ai] background failed", err?.message)
+            );
           }
         } catch (err) {
-          console.warn('[ai] scheduler not available', err?.message);
+          console.warn("[ai] scheduler not available", err?.message);
         }
       });
     }
   } catch (error) {
-    console.error('createReminder error', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to create reminder' });
+    console.error("createReminder error", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to create reminder",
+    });
   }
 };
 
@@ -146,11 +188,19 @@ exports.createReminder = async (req, res) => {
 exports.getReminders = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id || req.user;
-    const { type, completed, startDate: startDateQ, endDate: endDateQ, page = 1, limit = 50 } = req.query || {};
+    const {
+      type,
+      completed,
+      startDate: startDateQ,
+      endDate: endDateQ,
+      page = 1,
+      limit = 50,
+    } = req.query || {};
 
     const q = { user: userId };
     if (type) q.type = type;
-    if (typeof completed !== 'undefined') q.isCompleted = completed === 'true' || completed === true;
+    if (typeof completed !== "undefined")
+      q.isCompleted = completed === "true" || completed === true;
     if (startDateQ || endDateQ) {
       q.startDate = {};
       if (startDateQ) q.startDate.$gte = new Date(startDateQ);
@@ -161,14 +211,26 @@ exports.getReminders = async (req, res) => {
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100);
 
     const [items, total] = await Promise.all([
-      Reminder.find(q).sort({ createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum),
+      Reminder.find(q)
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum),
       Reminder.countDocuments(q),
     ]);
 
-    res.json({ success: true, data: items, total, page: pageNum, limit: limitNum });
+    res.json({
+      success: true,
+      data: items,
+      total,
+      page: pageNum,
+      limit: limitNum,
+    });
   } catch (error) {
-    console.error('getReminders error', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to fetch reminders' });
+    console.error("getReminders error", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch reminders",
+    });
   }
 };
 
@@ -179,25 +241,39 @@ exports.getReminder = async (req, res) => {
     const { id } = req.params;
     const reminder = await Reminder.findOne({ _id: id, user: userId });
     if (!reminder) {
-      return res.status(404).json({ success: false, message: 'Reminder not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "Reminder not found" });
     }
     return res.json({ success: true, data: reminder });
   } catch (error) {
-    console.error('getReminder error', error);
-    return res.status(500).json({ success: false, message: error.message || 'Failed to fetch reminder' });
+    console.error("getReminder error", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch reminder",
+    });
   }
 };
 
 // Update a reminder
 exports.updateReminder = async (req, res) => {
+  console.log("abhucloig");
   try {
     const userId = req.user._id || req.user.id || req.user;
     const { id } = req.params;
     const updates = pickReminderFields(req.body || {});
 
+    if (updates.scheduleTime?.minutesBeforeStart !== undefined) {
+      console.log("avsdbfdj")
+      const val = Number(updates.scheduleTime.minutesBeforeStart);
+      updates.scheduleTime.minutesBeforeStart =
+        !isNaN(val) && val >= 0 ? val : 10; // default to 10 if invalid
+    }
     // Coerce startDate when provided
-    if (Object.prototype.hasOwnProperty.call(updates, 'startDate')) {
-      updates.startDate = updates.startDate ? new Date(updates.startDate) : null;
+    if (Object.prototype.hasOwnProperty.call(updates, "startDate")) {
+      updates.startDate = updates.startDate
+        ? new Date(updates.startDate)
+        : null;
     }
 
     // Apply update, ensuring ownership
@@ -205,10 +281,12 @@ exports.updateReminder = async (req, res) => {
       { _id: id, user: userId },
       { $set: updates },
       { new: true }
-    ).populate('user', 'fullname email');
+    ).populate("user", "fullname email");
 
     if (!updated) {
-      return res.status(404).json({ success: false, message: 'Reminder not found' });
+      return res
+        .status(404)
+        .json({ success: false, message: "Reminder not found" });
     }
 
     // Fire-and-forget TTS generation only when we have a startDate
@@ -217,18 +295,34 @@ exports.updateReminder = async (req, res) => {
         await ensureReminderTTS(updated._id, { user: updated.user });
       }
     } catch (e) {
-      console.warn('[tts] generation failed on update', e?.message);
+      console.warn("[tts] generation failed on update", e?.message);
     }
 
-    const useSync = process.env.USE_SYNC_AI === '1';
+    const useSync = process.env.USE_SYNC_AI === "1";
     if (useSync && ai?.processBackgroundAI) {
-      console.log('[ai] USE_SYNC_AI enabled: processing AI synchronously on update');
+      console.log(
+        "[ai] USE_SYNC_AI enabled: processing AI synchronously on update"
+      );
       try {
-        const { reminder: afterAI, meta } = await ai.processBackgroundAI(updated._id, { user: updated.user });
-        return res.status(200).json({ success: true, data: afterAI || updated, aiMeta: meta || null });
+        const { reminder: afterAI, meta } = await ai.processBackgroundAI(
+          updated._id,
+          { user: updated.user }
+        );
+        return res.status(200).json({
+          success: true,
+          data: afterAI || updated,
+          aiMeta: meta || null,
+        });
       } catch (e) {
-        console.warn('[ai] sync AI failed on update; returning base reminder', e?.message);
-        return res.status(200).json({ success: true, data: updated, aiMeta: { error: e?.message } });
+        console.warn(
+          "[ai] sync AI failed on update; returning base reminder",
+          e?.message
+        );
+        return res.status(200).json({
+          success: true,
+          data: updated,
+          aiMeta: { error: e?.message },
+        });
       }
     } else {
       res.status(200).json({ success: true, data: updated });
@@ -236,16 +330,22 @@ exports.updateReminder = async (req, res) => {
       setImmediate(() => {
         try {
           if (ai?.processBackgroundAI) {
-            ai.processBackgroundAI(updated._id, { user: updated.user }).catch(err => console.warn('[ai] background update failed', err?.message));
+            ai.processBackgroundAI(updated._id, { user: updated.user }).catch(
+              (err) =>
+                console.warn("[ai] background update failed", err?.message)
+            );
           }
         } catch (err) {
-          console.warn('[ai] scheduler not available', err?.message);
+          console.warn("[ai] scheduler not available", err?.message);
         }
       });
     }
   } catch (error) {
-    console.error('updateReminder error', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to update reminder' });
+    console.error("updateReminder error", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update reminder",
+    });
   }
 };
 
@@ -255,11 +355,17 @@ exports.deleteReminder = async (req, res) => {
     const userId = req.user._id || req.user.id || req.user;
     const { id } = req.params;
     const removed = await Reminder.findOneAndDelete({ _id: id, user: userId });
-    if (!removed) return res.status(404).json({ success: false, message: 'Reminder not found' });
+    if (!removed)
+      return res
+        .status(404)
+        .json({ success: false, message: "Reminder not found" });
     res.json({ success: true });
   } catch (error) {
-    console.error('deleteReminder error', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to delete reminder' });
+    console.error("deleteReminder error", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to delete reminder",
+    });
   }
 };
 
@@ -268,19 +374,29 @@ exports.getReminderTTS = async (req, res) => {
   try {
     const userId = req.user._id || req.user.id || req.user;
     const { id } = req.params;
-    const reminder = await Reminder.findOne({ _id: id, user: userId }).select('tts title');
-    if (!reminder) return res.status(404).json({ success: false, message: 'Reminder not found' });
+    const reminder = await Reminder.findOne({ _id: id, user: userId }).select(
+      "tts title"
+    );
+    if (!reminder)
+      return res
+        .status(404)
+        .json({ success: false, message: "Reminder not found" });
 
     const audio = reminder.tts?.audio;
     if (!audio?.data || !audio?.contentType) {
-      return res.status(404).json({ success: false, message: 'TTS not available' });
+      return res
+        .status(404)
+        .json({ success: false, message: "TTS not available" });
     }
-    res.setHeader('Content-Type', audio.contentType || 'audio/mpeg');
-    if (audio.size) res.setHeader('Content-Length', audio.size);
+    res.setHeader("Content-Type", audio.contentType || "audio/mpeg");
+    if (audio.size) res.setHeader("Content-Length", audio.size);
     return res.end(audio.data);
   } catch (error) {
-    console.error('getReminderTTS error', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to stream TTS' });
+    console.error("getReminderTTS error", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to stream TTS",
+    });
   }
 };
 
@@ -290,13 +406,18 @@ exports.ensureReminderTTSNow = async (req, res) => {
     const userId = req.user._id || req.user.id || req.user;
     const { id } = req.params;
     const reminder = await Reminder.findOne({ _id: id, user: userId });
-    if (!reminder) return res.status(404).json({ success: false, message: 'Reminder not found' });
+    if (!reminder)
+      return res
+        .status(404)
+        .json({ success: false, message: "Reminder not found" });
 
     const ensured = await ensureReminderTTS(reminder._id, { user: req.user });
     res.json({ success: true, tts: ensured?.tts || reminder.tts || {} });
   } catch (error) {
-    console.error('ensureReminderTTSNow error', error);
-    res.status(500).json({ success: false, message: error.message || 'Failed to ensure TTS' });
+    console.error("ensureReminderTTSNow error", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Failed to ensure TTS",
+    });
   }
 };
-

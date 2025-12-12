@@ -13,6 +13,8 @@ const validate = (req, res, next) => {
     return next();
   }
 
+  console.log("error" , errors)
+
   // Extract error messages
   const extractedErrors = [];
   errors.array().map(err => {
